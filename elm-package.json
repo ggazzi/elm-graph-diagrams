@@ -1,5 +1,5 @@
 {
-    "version": "0.0.0",
+    "version": "0.1.0",
     "summary": "A library for drawing interactive graph-based diagrams.",
     "repository": "https://github.com/ggazzi/elm-graph-diagrams.git",
     "license": "Apache 2.0",
