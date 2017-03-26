@@ -244,11 +244,16 @@ type alias Node msg =
 
 
 {-| Minimal information needed to display an edge.
+
+The edge will be drawn as a series of line segments that starts on the source, ends on the target
+and goes through each of the control points in order. Furthermore, each control point will be drawn
+as a dot.
 -}
 type alias Edge =
     { id : ( Int, Int )
     , source : Endpoint
     , target : Endpoint
+    , controlPoints : List Position
     }
 
 
@@ -345,71 +350,131 @@ nodeView envelope node =
 
 
 edgeView : Edge -> Svg msg
-edgeView { source, target } =
+edgeView { source, target, controlPoints } =
     let
-        ( adjustedSource, adjustedTarget, length ) =
-            adjustEndpoints source target
+        segments =
+            adjustSegments source target controlPoints
     in
-        Svg.path
-            [ Attr.class "elm-graph-diagrams__edge"
-            , Attr.stroke edgeColor
-            , Attr.strokeWidth "1.5"
-            , Attr.markerEnd ("url(#" ++ arrowhead.id ++ ")")
-            , Attr.d <|
-                if length == 0 then
-                    "M0 0"
-                    -- Dummy path, nothing should be shown
-                else
-                    moveTo adjustedSource ++ lineTo adjustedTarget
+        Svg.g [ Attr.class "elm-graph-diagrams__edge" ]
+            ([ Svg.path
+                [ Attr.stroke edgeColor
+                , Attr.strokeWidth "1.5"
+                , Attr.fill "none"
+                , Attr.markerEnd ("url(#" ++ arrowhead.id ++ ")")
+                , Attr.d (renderSegments segments)
+                ]
+                []
+             ]
+                ++ List.map renderControlPoint controlPoints
+            )
+
+
+renderControlPoint : Position -> Svg msg
+renderControlPoint { x, y } =
+    let
+        translate =
+            "translate(" ++ toString x ++ "," ++ toString y ++ ")"
+    in
+        Svg.circle
+            [ Attr.class "elm-graph-diagrams__edge__ctrlpoint"
+            , Attr.r "2"
+            , Attr.fill "black"
+            , Attr.transform translate
             ]
             []
 
 
-adjustEndpoints : Endpoint -> Endpoint -> ( Position, Position, Float )
-adjustEndpoints source target =
-    let
-        ( dx, dy ) =
-            ( target.x - source.x, target.y - source.y )
+renderSegments : List Position -> String
+renderSegments segments =
+    case segments of
+        [] ->
+            ""
 
-        segment =
-            { start = source
-            , end = target
-            , dx = dx
-            , dy = dy
-            , length = sqrt (dx * dx + dy * dy)
-            }
-
-        minimumArrowLength =
-            1
-
-        adjusted =
-            segment
-                |> shrinkSegmentTo
-                    ( intersectAtStart segment source.shape
-                    , intersectAtEnd segment target.shape - arrowhead.length / segment.length
-                    )
-    in
-        ( positionOf adjusted.start
-        , positionOf adjusted.end
-        , adjusted.length
-        )
+        start :: rest ->
+            String.concat (moveTo start :: List.map lineTo rest)
 
 
-type alias Segment a =
-    { start : Positioned a
-    , end : Positioned a
+adjustSegments : Endpoint -> Endpoint -> List Position -> List Position
+adjustSegments first last middle =
+    case middle of
+        [] ->
+            let
+                segment =
+                    segmentFromPoints (positionOf first) (positionOf last)
+
+                adjusted =
+                    segment
+                        |> shrinkSegmentTo
+                            ( intersectAtStart segment first.shape
+                            , intersectAtEnd segment last.shape - arrowhead.length / segment.length
+                            )
+            in
+                [ positionOf adjusted.start
+                , positionOf adjusted.end
+                ]
+
+        second :: _ ->
+            let
+                segment =
+                    segmentFromPoints (positionOf first) second
+
+                adjusted =
+                    segment
+                        |> shrinkSegmentTo ( intersectAtStart segment first.shape, 1 )
+            in
+                adjusted.start :: second :: adjustLastSegment last middle
+
+
+adjustLastSegment : Endpoint -> List Position -> List Position
+adjustLastSegment last middle =
+    case middle of
+        [ secondLast ] ->
+            let
+                segment =
+                    segmentFromPoints secondLast (positionOf last)
+
+                adjusted =
+                    segment
+                        |> shrinkSegmentTo ( 0, intersectAtEnd segment last.shape - arrowhead.length / segment.length )
+            in
+                [ secondLast, adjusted.end ]
+
+        point :: rest ->
+            point :: adjustLastSegment last rest
+
+        [] ->
+            Debug.crash "unreachable code"
+
+
+type alias Segment =
+    { start : Position
+    , end : Position
     , dx : Float
     , dy : Float
     , length : Float
     }
 
 
-reverseSegment : Segment a -> Segment a
+segmentFromPoints : Position -> Position -> Segment
+segmentFromPoints start end =
+    let
+        ( dx, dy ) =
+            ( end.x - start.x, end.y - start.y )
+    in
+        { start = start
+        , end = end
+        , dx = dx
+        , dy = dy
+        , length = sqrt (dx * dx + dy * dy)
+        }
+
+
+reverseSegment : Segment -> Segment
 reverseSegment { start, end, dx, dy, length } =
     { start = end, end = start, dx = -dx, dy = -dy, length = length }
 
 
-shrinkSegmentTo : ( Float, Float ) -> Segment a -> Segment a
+shrinkSegmentTo : ( Float, Float ) -> Segment -> Segment
 shrinkSegmentTo ( tStart, tEnd ) ({ start, end, dx, dy, length } as segment) =
     let
         ( tStart_, tEnd_ ) =
@@ -437,7 +502,7 @@ equation. The point of intersection may be calculated with
 The existence of a unique endpoint is guaranteed since all `Shape`s
 are convex, the segment's starting point is within the shape.
 -}
-intersectAtStart : Segment a -> Shape -> Float
+intersectAtStart : Segment -> Shape -> Float
 intersectAtStart segment shape =
     let
         t =
@@ -456,7 +521,7 @@ equation. The point of intersection may be calculated with
 The existence of a unique endpoint is guaranteed since all `Shape`s
 are convex, the segment's endpoint is within the shape.
 -}
-intersectAtEnd : Segment a -> Shape -> Float
+intersectAtEnd : Segment -> Shape -> Float
 intersectAtEnd { start, end, dx, dy, length } shape =
     case shape of
         NoShape ->
